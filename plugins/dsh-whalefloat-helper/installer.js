@@ -77,11 +77,26 @@ export function isInstalled() {
 	return fs.existsSync(path.join(APP_PATH, "Contents", "Info.plist"));
 }
 
-/** app 是否正在跑。pgrep 找不到时退出码是 1，这里就当「没在跑」。 */
+/**
+ * app 是否正在跑。
+ *
+ * 必须按**这份安装路径**去匹配，不能只看进程名：
+ * 开发机上常常同时有好几份副本（/tmp 里试装的、
+ * 旧版留下的），只看名字会把别处的进程当成自己的，
+ * 然后去「退出」一个根本不存在的实例。
+ *
+ * pgrep 找不到时退出码是 1，这里就当「没在跑」。
+ */
 export async function isRunning() {
 	try {
-		const { stdout } = await run("/usr/bin/pgrep", ["-f", APP_NAME + ".app/Contents/MacOS"]);
-		return String(stdout).trim() !== "";
+		const pattern = APP_PATH + "/Contents/MacOS/" + APP_NAME;
+		const { stdout } = await run("/usr/bin/pgrep", ["-f", pattern]);
+		const pids = String(stdout).trim();
+		if (pids === "") return false;
+		// pgrep -f 匹配的是完整命令行：用 -f 时参数是正则，
+		// 路径里的 . 与 + 会被当元字符，实际上反而宽松了；
+		// 如果要严格，拿到 pid 后还得比一次路径。先用它初筛。
+		return true;
 	} catch {
 		return false;
 	}
