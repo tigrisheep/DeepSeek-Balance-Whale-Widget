@@ -252,6 +252,17 @@ struct Settings: Codable {
     /// 气泡内是否显示当前时间。
     var showClock: Bool = true
 
+    // ── 连接 ────────────────────────────────────────────────
+    /// 浮窗跟哪个 DSH 说话。nil 表示「自动」。
+    ///
+    /// 这是 0.2.2 修的那个设计问题的开关：以前只有网页版一个答案，
+    /// 用户改用桌面版之后，状态灯、「新的对话」、截图提问全都还对着
+    /// 3080 那个实例，表现是「点了没反应」或者「消息发到了另一个窗口」。
+    ///
+    /// 存字符串而不是枚举：Settings 要能容忍未来新增的档位，
+    /// 读到不认识的值就当自动，不至于让整个设置文件解析失败。
+    var hostTarget: String?
+
     // ── 吸附 ────────────────────────────────────────────────
     /// 松手后是否吸附到最近的屏幕边缘。对应「吸附与翻转」。
     var snapEnabled: Bool = true
@@ -362,6 +373,9 @@ struct Settings: Codable {
         lastVersion = get(.lastVersion, "")
         lastSigningToken = get(.lastSigningToken, "")
         companyOn = get(.companyOn, true)
+        // 旧配置里没有这个键，解出来是 nil —— 正好就是「自动」。
+        // 读到不认识的值也按自动处理，别让一个旧档位把设置卡死。
+        hostTarget = try? c.decodeIfPresent(String.self, forKey: .hostTarget)
     }
 
     static func load() -> Settings {

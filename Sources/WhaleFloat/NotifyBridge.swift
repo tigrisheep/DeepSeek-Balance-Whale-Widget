@@ -222,8 +222,13 @@ final class NotifyBridge: NSObject, UNUserNotificationCenterDelegate {
     /// 首条用「你好」—— 它不是给用户看的，作用只是让 DSH 开口。
     /// 等 DSH 回完，正常的通知链路就接上了，用户可以直接在通知里回。
     /// 起一次新对话；`imagePath` 非空时把这张图也带上（whale-study）。
-    func beginNewSession(text: String = "你好", imagePath: String? = nil) {
-        writeReply(text: text, sessionId: "", newSession: true, imagePath: imagePath)
+    ///
+    /// `target` 决定这条消息归哪一侧的插件消费。不传就留空 ——
+    /// 留空时插件按老规矩谁都认，那是为兼容旧版 app 留的路，不是首选。
+    func beginNewSession(text: String = "你好", imagePath: String? = nil,
+                         target: HostTarget? = nil) {
+        writeReply(text: text, sessionId: "", newSession: true,
+                   imagePath: imagePath, target: target)
     }
 
     /// 下一个序号。
@@ -243,7 +248,8 @@ final class NotifyBridge: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func writeReply(text: String, sessionId: String,
-                            newSession: Bool = false, imagePath: String? = nil) {
+                            newSession: Bool = false, imagePath: String? = nil,
+                            target: HostTarget? = nil) {
         var payload: [String: Any] = [
             "seq": nextSeq(),
             "text": text,
@@ -251,6 +257,9 @@ final class NotifyBridge: NSObject, UNUserNotificationCenterDelegate {
             "newSession": newSession,
             "ts": Date().timeIntervalSince1970 * 1000,
         ]
+        // 只写 target 本身，不写解释。插件那侧靠它跟自己的 profile 对暗号：
+        // 对不上的就跳过，两个 profile 同时装着插件时才不会抢同一条。
+        if let target { payload["target"] = target.pluginTarget }
         // 只递路径，不在这里转 base64 ——
         // JSON 文件是轮询读的，塞几十兆 base64 会把 poller 拖慢；
         // 读文件、验格式交给插件那边一次做完。

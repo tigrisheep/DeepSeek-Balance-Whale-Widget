@@ -177,3 +177,46 @@ else
         || echo "（签名跳过，本地运行不受影响）"
 fi
 echo "  运行：open "$DEST""
+# ------------------------------------------------------------------
+# 把刚打好的 app 打成插件用的内嵌安装包。
+#
+# 只有在「发布打包」时做（RELEASE=1 且指定了 STAGE_DIR）：
+# 本地构建装到 /Applications 供日常使用，不该反过来改动仓库里的产物。
+#
+# 为什么在构建脚本里做、而不是手工打：这两个文件必须跟着同一次构建走。
+# 手打漏一次，就会出现「源码 0.2.2、插件里躺的还是 0.2.1」——
+# 用户点上架按钮装到的还是旧版，而界面上一切正常，极难察觉。
+#
+# COPYFILE_DISABLE=1 是必须的：不加的话 macOS 的 tar 会把扩展属性
+# 写成 ._xxx 伴生文件，解出来塞满 app 包，重签还会失败。
+if [ "${RELEASE:-0}" = "1" ] && [ -n "${STAGE_DIR:-}" ]; then
+    ASSETS="$HERE/plugins/dsh-whalefloat-helper/assets"
+    if [ -d "$(dirname "$ASSETS")" ]; then
+        echo "▸ 打包插件内嵌安装包…"
+        mkdir -p "$ASSETS"
+        # 在 app 的父目录里打包，tar 里存的就是 WhaleFloat.app/ 这个相对前缀，
+        # installer.js 正是按这个前缀解包后找 Contents/Info.plist。
+        rm -f "$ASSETS/${APP_NAME}.app.tar.gz"
+        ( cd "$(dirname "$DEST")" && COPYFILE_DISABLE=1 \
+            tar -czf "$ASSETS/${APP_NAME}.app.tar.gz" "${APP_NAME}.app" )
+        printf '%s' "$VERSION" > "$ASSETS/version.txt"
+        SIZE="$(du -h "$ASSETS/${APP_NAME}.app.tar.gz" | cut -f1 | tr -d ' ')"
+        echo "  内嵌安装包：${APP_NAME}.app.tar.gz（${SIZE}，版本 ${VERSION}）"
+        # 打完立刻验一遍：解到临时目录看版本对不对、签名还在不在。
+        # 这一步比事后靠用户报错便宜得多。
+        PEEK="$(mktemp -d)"
+        tar -xzf "$ASSETS/${APP_NAME}.app.tar.gz" -C "$PEEK"
+        PEEK_VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+            "$PEEK/${APP_NAME}.app/Contents/Info.plist" 2>/dev/null || echo "读取失败")"
+        if [ "$PEEK_VER" = "$VERSION" ] && codesign --verify --deep "$PEEK/${APP_NAME}.app" 2>/dev/null; then
+            echo "  校验通过：解包版本 ${PEEK_VER}，签名有效"
+        else
+            echo "  ✗ 校验失败：解包版本 ${PEEK_VER}（期望 ${VERSION}），或签名无效"
+            rm -rf "$PEEK"
+            exit 1
+        fi
+        rm -rf "$PEEK"
+    else
+        echo "  ⚠ 找不到插件目录，跳过内嵌安装包"
+    fi
+fi

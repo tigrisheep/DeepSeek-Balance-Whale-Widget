@@ -40,6 +40,36 @@ const POLL_MS = 700;
 /// 不能用 process.cwd()：DSH 的工作目录是用户的会话目录，不是插件目录。
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * 本插件装在哪个 profile 下（desktop / web / 别的）。
+ *
+ * 路径形如 ~/.dsh/profiles/<name>/node_modules/dsh-whalefloat-helper/index.js。
+ * 取不到就返回空串 —— 那种情况（比如有人把插件目录直接软链进来）
+ * 按老规矩处理：不做筛，谁的消息都认。
+ *
+ * 为什么需要它：desktop 与 web 两个 profile 可以各装一份插件、各跑
+ * 一个轮询循环，而它们读的是同一个 ~/.dsh/.whalefloat-reply.json。
+ * 没有归属判定时，用户点一次「新的对话」，两个循环都会去建会话 ——
+ * 表现就是凭空多出一个。app 现在会在消息里写 target，这里按它对。
+ */
+const PROFILE = (HERE.match(/[\\/]profiles[\\/]([^\\/]+)[\\/]/) || [])[1] || "";
+
+/**
+ * 这条消息该不该由我处理。
+ *
+ * 三种情形：
+ *   · 消息没写 target      → 老版 app 发的，谁都认（保持向后兼容）
+ *   · 我不知道自己是谁      → 同上，不筛
+ *   · 写了且与我一致        → 认
+ *   · 写了但不一致          → 跳过，留给另一侧的插件
+ */
+function owns(box) {
+	const want = typeof box?.target === "string" ? box.target.trim() : "";
+	if (want === "") return true;
+	if (PROFILE === "") return true;
+	return want === PROFILE;
+}
+
 // ── 通用 IO ─────────────────────────────────────────────────────────
 
 function writeJSON(url, obj) {
@@ -560,8 +590,16 @@ function makeReplyPoller(ctx, sc, sessions, workspaces) {
 			try {
 				const box = readJSON(F.reply);
 				if (!box || typeof box.seq !== "number" || box.seq <= replyCursor) return;
-				// 先推进游标，避免同一条被反复投递
+
+				// 归属判定要在**推进游标之前** —— 两条规则不一样重。
+				// 不是给我的那条：只推进游标（否则每次轮询都要重新判断一遍），
+				// 但**不投递**。给我的那条：推进游标并投递。
+				//
+				// 早先这两个动作混在一起，于是同时装着两份插件时，
+				// 谁先轮询到谁就建会话，另一份也照做一遍 —— 一次点击两个会话。
+				const mine = owns(box);
 				replyCursor = box.seq;
+				if (!mine) return;
 
 				const text = String(box.text ?? "").trim();
 				if (text === "") return;
@@ -661,7 +699,8 @@ function apply(ctx) {
 	// 启动先落一次盘，让读取方不必等第一个事件
 	wait.flush();
 	notify.flush();
-	ctx.logger?.info?.(`dsh-whalefloat-helper: 输出 ${DSH_DIR}/.whalefloat-*.json`);
+	ctx.logger?.info?.(
+		`dsh-whalefloat-helper: 输出 ${DSH_DIR}/.whalefloat-*.json（profile ${PROFILE || "未知"}）`);
 }
 
 export { apply };

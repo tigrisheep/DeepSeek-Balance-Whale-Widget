@@ -2,20 +2,13 @@ import AppKit
 
 @MainActor
 enum DSHLauncher {
-    /// DSH 是否在跑：看 3080 端口有没有监听。
+    /// 用户当前选中的宿主在不在跑。
     ///
-    /// 不打扰服务、也不需要凭据。这个方法原先在 App 和 AnalysisWindow 里
-    /// 各写了一份完全一样的，合并到这里。
+    /// 0.2.2 起不再是「3080 有没有在听」—— 那只是网页版。
+    /// 桌面版跑在随机端口上，看不出端口，只能问 LaunchServices。
+    /// 判断本身挪进 HostTarget，这里只留一个旧名字给调用方。
     static var isRunning: Bool {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        p.arguments = ["-nP", "-iTCP:3080", "-sTCP:LISTEN"]
-        p.standardOutput = Pipe()
-        p.standardError = FileHandle.nullDevice
-        p.standardInput = FileHandle.nullDevice
-        do { try p.run() } catch { return false }
-        p.waitUntilExit()
-        return p.terminationStatus == 0
+        HostTarget.runningNow() != nil
     }
 
     /// 启动器脚本的位置，按优先级查找。
@@ -76,7 +69,10 @@ enum DSHLauncher {
     }
 
     /// 若缓存里的 URL 仍属于端口上那个进程，返回它。
-    private static func liveAuthenticatedURL() -> URL? {
+    ///
+    /// 不再是 private：HostTarget.reveal() 在「打开网页版」时也用它。
+    /// 两处各存一份判断会各错各的 —— 这类判断只该有一份。
+    static func liveAuthenticatedURL() -> URL? {
         guard let text = try? String(contentsOfFile: urlCachePath, encoding: .utf8) else { return nil }
         let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
         guard lines.count >= 2,
@@ -105,8 +101,11 @@ enum DSHLauncher {
         // 这一步放在起脚本之前 —— 脚本内部其实也做了同样的判断，但那是
         // 一个 bash 进程、还有最长约 30 秒的等待。用户点一下只想要个窗口，
         // 毫秒级返回比什么都强。
-        if let live = liveAuthenticatedURL() {
-            NSWorkspace.shared.open(live)
+        //
+        // 0.2.2 起分两条：桌面版在跑就唤它，网页版在跑才开浏览器。
+        // 以前只认 3080，桌面版用户点这个菜单会去起一个多余的 dsh web。
+        if let target = HostTarget.runningNow() {
+            if openBrowser { target.reveal() }
             return
         }
         guard let scriptPath else {

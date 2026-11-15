@@ -98,6 +98,30 @@ enum MenuBuilder {
 
         m.addItem(.separator())
 
+        // ── 连哪个 DSH ──
+        //
+        // 这一组是 0.2.2 补的。以前没有这个选择，程序一律认 3080 ——
+        // 装了桌面版的人会发现状态灯在说谎、「新的对话」发到了另一个实例。
+        //
+        // 「自动」放在第一位并默认勾选：多数人两个都装过，
+        // 他不想每次都来这儿点一下。选定了具体某一侧之后，
+        // 就算那一刻它没在跑也不偷偷换人 —— 那是他要的那个。
+        let conn = NSMenu()
+        add(conn, "自动（谁在跑用谁）", #selector(AppDelegate.setHostAuto), target,
+            checked: target.settings.hostTarget == nil)
+        conn.addItem(.separator())
+        for each in HostTarget.allCases {
+            let running = each.isRunning
+            add(conn, running ? "\(each.title)（运行中）" : "\(each.title)",
+                each == .web ? #selector(AppDelegate.setHostWeb) : #selector(AppDelegate.setHostDesktop),
+                target,
+                checked: target.settings.hostTarget == each.rawValue)
+        }
+        conn.addItem(.separator())
+        hint(conn, "切换后只影响之后的动作，已经发出的不受影响")
+        m.addItem(submenu("连接 DSH", conn))
+        m.addItem(.separator())
+
         // ── 常用动作 ──
         add(m, "看图解题…", #selector(AppDelegate.chooseImageForStudy), target)
         m.items.last?.toolTip = "也可以直接把截图拖到我身上"

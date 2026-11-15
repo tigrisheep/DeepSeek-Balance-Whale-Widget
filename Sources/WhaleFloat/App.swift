@@ -453,12 +453,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 跳到 DSH 的界面（不负责启动）。
     ///
     /// 与 launchDSH 的分工：
-    ///   · jumpToDSH  —— DSH 已经在跑，只是把浏览器切过去
+    ///   · jumpToDSH  —— DSH 已经在跑，只是把界面切到前面
     ///   · launchDSH  —— 不确定在不在跑，交给启动器处理（会复用认证 URL、必要时拉起）
     /// 通知点击、等待气泡点击走前者；状态栏左键和菜单项走后者。
+    ///
+    /// 0.2.2 起不再自己拼 3080 的地址：桌面版拼不出来，网页版要带 token。
+    /// 两件事都交给 HostTarget，谁在跑就跳谁。
     func jumpToDSH() {
-        guard let url = URL(string: "http://127.0.0.1:3080") else { return }
-        NSWorkspace.shared.open(url)
+        guard let target = activeTarget() else {
+            alert("没找到 DSH", "网页版和桌面版都没有在运行。点「启动 DSH GUI」可以拉起来。")
+            return
+        }
+        target.reveal()
+    }
+
+    /// 当前该跟哪个宿主说话。
+    ///
+    /// 用户显式选过就按他选的（哪怕那一刻它没在跑 —— 他要的就是那个，
+    /// 悄悄换成另一个更糟）；选「自动」才去探测。
+    func activeTarget() -> HostTarget? {
+        if let picked = settings.hostTarget.flatMap(HostTarget.init(rawValue:)) {
+            return picked.isRunning ? picked : nil
+        }
+        return HostTarget.runningNow()
     }
 
     private func showBalanceBubble() {
@@ -835,9 +852,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 用户不必先打开网页 —— DSH 回完会走正常的通知链路，
     /// 那一刻就能直接在通知里接着说了。
     @objc func startNewConversation() {
-        // 热启动：DSH 已经在跑，直接发。
-        if DSHLauncher.isRunning {
-            NotifyBridge.shared.beginNewSession()
+        // 热启动：目标已经在跑，直接发 —— 但要告诉插件发给谁。
+        //
+        // 之前只写一句「开个新会话」，两个 profile 的插件谁先轮询到谁就建，
+        // 于是点一次可能建出两个。target 让它们各有各的门。
+        if let target = activeTarget() {
+            NotifyBridge.shared.beginNewSession(target: target)
             return
         }
 
@@ -846,16 +866,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 整个过程不弹任何框 —— 用户点这一下是想说话，不是想听进度。
         // 成功与否都有回音：成功了 DSH 会回一句并推通知，超时则明确告知。
         NSLog("WhaleFloat: 新的对话 —— DSH 未运行，先冷启动")
-        // 静默拉起：不开浏览器。这条路是让用户在通知里聊，
-        // 把网页拽到前台既打断人，又会停在旧会话上。
-        DSHLauncher.launch(openBrowser: false)
-        waitForDSHReady(timeout: 120) { [weak self] ok in
+        // 静默拉起：不开界面。这条路是让用户在通知里聊，
+        // 把界面拽到前台既打断人，又会停在旧会话上。
+        launchPreferredTarget()
+        waitForDSHReady(target: preferredTarget(), timeout: 120) { [weak self] ok in
             guard let self else { return }
             if ok {
-                NotifyBridge.shared.beginNewSession()
+                NotifyBridge.shared.beginNewSession(target: self.preferredTarget())
             } else {
+                let hint = self.preferredTarget().notRunningHint
                 self.alert("DSH 没起来",
-                           "等了两分钟仍连不上 3080。可以点「启动 DSH GUI」看看卡在哪。")
+                           "等了两分钟还是没起来：\(hint)。可以点「启动 DSH GUI」看看卡在哪。")
+            }
+        }
+    }
+
+    /// 用户想要的那个宿主。选过就用选的，没选按探测的优先级。
+    ///
+    /// 与 activeTarget() 的区别：这个不检查它在不在跑。
+    /// 冷启动那条路要的正是「现在没跑、但我要拉起来的那一个」。
+    func preferredTarget() -> HostTarget {
+        if let picked = settings.hostTarget.flatMap(HostTarget.init(rawValue:)) {
+            return picked
+        }
+        return HostTarget.runningNow() ?? .desktop
+    }
+
+    /// 按目标拉起对应的一侧。
+    ///
+    /// 网页版交给 dsh-launcher 脚本（它会起 dsh web 并抓认证 URL）；
+    /// 桌面版只能 open，没有第二条路。
+    func launchPreferredTarget(openUI: Bool = false) {
+        switch preferredTarget() {
+        case .web:
+            DSHLauncher.launch(openBrowser: openUI)
+        case .desktop:
+            // 已经开着就只是唤到前台，没开才启动。
+            let runningApp = NSRunningApplication
+                .runningApplications(withBundleIdentifier: HostTarget.desktopBundleID).first
+            if let runningApp {
+                if openUI { runningApp.activate(options: [.activateIgnoringOtherApps]) }
+            } else {
+                let url = URL(fileURLWithPath: "/Applications/DeepSeek Harness.app")
+                NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
             }
         }
     }
@@ -864,13 +917,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     ///
     /// 端口通了还不算完：DSH 要把插件加载完才认得 reply 文件，
     /// 所以再多等两秒。宁可慢一点，也别让消息写进一个还没人的信箱。
-    private func waitForDSHReady(timeout: TimeInterval,
+    private func waitForDSHReady(target: HostTarget, timeout: TimeInterval,
                                  completion: @escaping @MainActor (Bool) -> Void) {
         Task { @MainActor in
             let deadline = Date().addingTimeInterval(timeout)
             while Date() < deadline {
-                if DSHLauncher.isRunning {
-                    // 端口通了还不算完 —— 再给插件两秒加载时间
+                if target.isRunning {
+                    // 起来了还不算完 —— 再给插件两秒加载时间，
+                    // 否则消息会写进一个还没有人在轮询的信箱。
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                     completion(true)
                     return
@@ -893,8 +947,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func launchDSH() {
-        DSHLauncher.launch()
+        launchPreferredTarget(openUI: true)
     }
+
+    // MARK: - 连接目标（0.2.2）
+
+    /// 三个菜单项共用的写入路径。洗完立刻存盘 ——
+    /// 这个选择跨会话要用，不该等退出时才落盘。
+    private func setHostTarget(_ value: String?) {
+        settings.hostTarget = value
+        settings.save()
+        let name = value.flatMap(HostTarget.init(rawValue:))?.title ?? "自动"
+        NSLog("WhaleFloat: 连接目标改为 \(name)")
+    }
+
+    @objc func setHostAuto() { setHostTarget(nil) }
+    @objc func setHostWeb() { setHostTarget(HostTarget.web.rawValue) }
+    @objc func setHostDesktop() { setHostTarget(HostTarget.desktop.rawValue) }
 
     /// 菜单「卸载 WhaleFloat…」。
     ///
@@ -1004,25 +1073,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func restartDSHAsync() async {
-        // ① 结束现有的 dsh web
-        for pid in ProcessManager.pids(matching: "dsh web") {
-            kill(pid, SIGTERM)
+        // 重启分两种，做法不一样 ——
+        //   · 网页版：dsh web 是本程序能起能停的子进程风格的东西，
+        //     杀掉再交给启动器拉起即可；
+        //   · 桌面版：那是用户自己的 app，里面有他的会话和正在跑的轮次。
+        //     这里**不去杀它**，只是把设置里记的那份「上次的宿主」
+        //     重新确认一遍。替他重启桌面版风险太大，收益也看不出来。
+        switch preferredTarget() {
+        case .web:
+            for pid in ProcessManager.pids(matching: "dsh web") {
+                kill(pid, SIGTERM)
+            }
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            for pid in ProcessManager.pids(matching: "dsh web") {
+                kill(pid, SIGKILL)
+            }
+            // 进程没了不等于端口没了，差这一两秒就会撞 EADDRINUSE，
+            // 表现成「DSH 起不来」。
+            let freed = await Task.detached {
+                ProcessManager.waitForPortFree(HostTarget.webPort, timeout: 6.0)
+            }.value
+            if !freed {
+                NSLog("WhaleFloat: 重启 DSH 时 \(HostTarget.webPort) 仍被占用")
+            }
+            DSHLauncher.launch()
+
+        case .desktop:
+            NSLog("WhaleFloat: 目标是桌面版，不替用户重启它")
+            launchPreferredTarget(openUI: true)
         }
-        // ② 等它退干净
-        try? await Task.sleep(nanoseconds: 2_500_000_000)
-        for pid in ProcessManager.pids(matching: "dsh web") {
-            kill(pid, SIGKILL)
-        }
-        // ③ 再等端口真的松开 —— 进程没了不等于端口没了，
-        //    差这一两秒就会撞 EADDRINUSE，表现成「DSH 起不来」。
-        let freed = await Task.detached {
-            ProcessManager.waitForPortFree(3080, timeout: 6.0)
-        }.value
-        if !freed {
-            NSLog("WhaleFloat: 重启 DSH 时 3080 仍被占用")
-        }
-        // ④ 交给启动器重新拉起（它会开浏览器）
-        DSHLauncher.launch()
     }
 
     /// 菜单「完全退出（并关闭 DSH）」。
@@ -1122,24 +1201,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if presenter.kind != .company { presenter.show(.study) }
         NSLog("WhaleFloat: 拖入图片 \(url.lastPathComponent)")
 
-        let send = { [weak self] in
-            guard self != nil else { return }
-            NotifyBridge.shared.beginNewSession(text: Self.studyPrompt, imagePath: url.path)
+        let target = preferredTarget()
+        let send = {
+            NotifyBridge.shared.beginNewSession(
+                text: Self.studyPrompt, imagePath: url.path, target: target)
         }
 
-        if DSHLauncher.isRunning {
+        if let live = activeTarget() {
+            // 目标已经在跑，但有可能跑的是另一个 —— 那种情况下
+            // 消息仍按片 target 递给插件，另一侧的 poller 会跳过它。
+            NSLog("WhaleFloat: 送图给 \(live.title)")
             send()
             return
         }
-        NSLog("WhaleFloat: 拖图时 DSH 没在跑，先冷启动")
-        DSHLauncher.launch(openBrowser: false)
-        waitForDSHReady(timeout: 120) { [weak self] ok in
+        NSLog("WhaleFloat: 拖图时 DSH 没在跑，先冷启动 \(target.title)")
+        launchPreferredTarget()
+        waitForDSHReady(target: target, timeout: 120) { [weak self] ok in
             guard let self else { return }
             if ok {
                 send()
             } else {
                 self.alert("DSH 没起来",
-                           "图已经存在 \(url.path)，但等了两分钟仍连不上 3080。")
+                           "图已经存在 \(url.path)，但等了两分钟还是没起来：\(target.notRunningHint)。")
             }
         }
     }

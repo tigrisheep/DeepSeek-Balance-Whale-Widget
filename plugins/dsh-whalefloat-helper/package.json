@@ -1,6 +1,6 @@
 {
   "name": "dsh-whalefloat-helper",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "鲸鱼浮窗 WhaleFloat 的 DSH 侧中介：等待提示 / 每轮消耗 / 系统通知 / 拖图解题，并在插件页提供一键安装 WhaleFloat.app。",
   "type": "module",
   "main": "index.js",
