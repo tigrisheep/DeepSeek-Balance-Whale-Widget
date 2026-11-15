@@ -95,17 +95,31 @@ fi
 # 源从**项目目录**取，不是从 ~/.dsh/plugins/。
 # 后者是安装目标：卸载脚本会把它清掉，从那里读会导致
 # 「卸过一次之后，再构建出来的包里就没有插件了」。
-mkdir -p "$DEST/Contents/Resources/plugins"
-for p in dsh-whalefloat-helper; do
-  SRC_PLUGIN="$HERE/plugins/$p"
-  if [ -d "$SRC_PLUGIN" ]; then
-    rm -rf "$DEST/Contents/Resources/plugins/$p"
-    cp -R "$SRC_PLUGIN" "$DEST/Contents/Resources/plugins/$p"
-    echo "  内置插件：$p"
-  else
-    echo "  ⚠ 项目里缺少插件源码：$SRC_PLUGIN"
-  fi
-done
+#
+# 0.2.1 起**默认不再内置**。插件已经上架，由市场分发、由市场升级，
+# 再由插件负责把 app 装上 —— 要是 app 里还塞一份，两条安装路径会
+# 互相覆盖，用户跟着失去升级能力。
+#
+# 更直接的问题：插件里内嵌着 app 的 tar.gz（2.4 MB），
+# app 再内置插件，就成了 app 里装着 app —— 这一份纯属浪费，
+# 而且会让人误以为「包里那份是正版」。
+#
+# 需要离线兜底时才设 BUNDLE_PLUGIN=1，把插件连同一份安装包塞进 app。
+if [ "${BUNDLE_PLUGIN:-0}" = "1" ]; then
+  mkdir -p "$DEST/Contents/Resources/plugins"
+  for p in dsh-whalefloat-helper; do
+    SRC_PLUGIN="$HERE/plugins/$p"
+    if [ -d "$SRC_PLUGIN" ]; then
+      rm -rf "$DEST/Contents/Resources/plugins/$p"
+      cp -R "$SRC_PLUGIN" "$DEST/Contents/Resources/plugins/$p"
+      echo "  内置插件：$p"
+    else
+      echo "  ⚠ 项目里缺少插件源码：$SRC_PLUGIN"
+    fi
+  done
+else
+  echo "  插件不入包（由插件市场分发；离线包设 BUNDLE_PLUGIN=1）"
+fi
 
 cat > "$DEST/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

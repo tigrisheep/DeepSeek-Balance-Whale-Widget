@@ -19,7 +19,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { registerRoutes } from "./routes.js";
 
 const DSH_DIR = path.join(os.homedir(), ".dsh");
 const F = {
@@ -33,6 +35,10 @@ const QUESTION_TOOL = "ask_user_question";
 const MAX_EVENTS = 500;
 const MAX_PENDING = 20;
 const POLL_MS = 700;
+
+/// 插件自身所在目录。安装包在它的 assets/ 下，用 import.meta.url 定位 ——
+/// 不能用 process.cwd()：DSH 的工作目录是用户的会话目录，不是插件目录。
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // ── 通用 IO ─────────────────────────────────────────────────────────
 
@@ -594,6 +600,39 @@ function apply(ctx) {
 	// sessionController 用于把通知里的回复投回对话。
 	// attachments 是图片通道的硬依赖：没注入就取不到，必须列进来。
 	// agents / llm 只用于「当前模型能不能看图」的预判，走 service() 柔性取。
+
+	// 安装按钮的接口。webServer 是可选依赖：宿主没提供时按钮会显示
+	// 「读不到安装状态」，但等待提示 / 记账 / 通知照常工作 ——
+	// 一个能力缺失不该让整个插件失效。
+	//
+	// 必须走 ctx.inject，不能在这里直接 service(ctx, "webServer")：
+	// apply 跑的时候 webServer 往往还没就绪，Cordis 对未注入的服务
+	// 直接读会抛，被吞掉之后就成了「路由永远挂不上、按钮一直转圈」。
+	// dshmarket 用的也是 ctx.inject(['webServer', 'loader'], ...)。
+	ctx.inject(["webServer"], (sctx) => {
+		const webServer = service(sctx, "webServer");
+		if (!webServer || typeof webServer.register !== "function") {
+			ctx.logger?.info?.("dsh-whalefloat-helper: 宿主没有 webServer，安装按钮不可用");
+			return;
+		}
+		try {
+			const disposers = registerRoutes(webServer, HERE, ctx.logger);
+			sctx.effect(() => () => {
+				for (const off of disposers) {
+					try {
+						off();
+					} catch {
+						/* 注销失败不影响卸载 */
+					}
+				}
+			}, "whalefloat-helper.routes()");
+			ctx.logger?.info?.("dsh-whalefloat-helper: 已挂载 /whalefloat/status 与 /whalefloat/install");
+		} catch (err) {
+			// 路由重复注册会抛 —— 记下来，但别让插件整体挂掉
+			ctx.logger?.warn?.("whalefloat-helper: 安装接口挂载失败 " + err);
+		}
+	});
+
 	ctx.inject(["sessions", "sessionController", "workspaceRegistry", "attachments"], (sctx) => {
 		sctx.on("session/event", (session, event) => {
 			try {

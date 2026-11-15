@@ -1,20 +1,52 @@
 {
   "name": "dsh-whalefloat-helper",
-  "version": "0.2.0",
-  "private": true,
+  "version": "0.2.1",
+  "description": "鲸鱼浮窗 WhaleFloat 的 DSH 侧中介：等待提示 / 每轮消耗 / 系统通知 / 拖图解题，并在插件页提供一键安装 WhaleFloat.app。",
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
+    "./client": "./client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "routes.js",
+    "installer.js",
+    "cordis.patch.yml",
+    "assets"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "whalefloat",
+    "deepseek-harness",
+    "macos"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tigrisheep/DeepSeek-Balance-Whale-Widget.git",
+    "directory": "plugins/dsh-whalefloat-helper"
+  },
+  "homepage": "https://github.com/tigrisheep/DeepSeek-Balance-Whale-Widget",
+  "bugs": {
+    "url": "https://github.com/tigrisheep/DeepSeek-Balance-Whale-Widget/issues"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
+      ]
     }
   },
-  "peerDependencies": {
-    "@deepseek-ai/cordis": "~0.4.4"
+  "engines": {
+    "dsh": ">=0.2.0"
   }
 }
